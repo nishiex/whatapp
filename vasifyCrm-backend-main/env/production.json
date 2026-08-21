@@ -1,0 +1,15 @@
+﻿{
+  "NODE_ENV": "production",
+  "DB_HOST": "13.203.39.243",
+  "DB_USER": "vt_crm_app",
+  "DB_PASSWORD": "vt_CRM@20260131",
+  "DB_NAME": "vasify_crm_new_prod",
+  "JWT_SECRET": "4f6a9c1d3e8b4a2f8c9d0e1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u",
+  "JWT_EXPIRES_IN": "1d",
+  "FRONTEND_URL": "https://crm-new.vasifytech.com",
+  "AOC_API_KEY": "bLemUJOzQJPJg1DoxTjDmmnISlPx9I",
+  "AOC_FROM_NUMBER": "+919769026133",
+  "ADMIN_PHONE_NUMBER": "918360280936,919928032781,919569622334",
+  "PDF_LINK_SECRET": "change-me_pdf_link_secret",
+  "PDF_LINK_TTL": "15m"
+}

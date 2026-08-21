@@ -1,0 +1,18 @@
+# Application settings
+app_name: vasify-crm-frontend
+app_port: 8004
+health_check_path: "/"
+env: production
+
+# Domain configuration
+domain: crm-new.vasifytech.com
+
+# Target machine (must match inventory.yml)
+target_host: vt-prod-app-02
+
+# SSL settings
+ssl_email: yogendra@vasifytech.com
+
+# Docker registry (GitLab)
+registry: registry.gitlab.com
+registry_image: registry.gitlab.com/vasify/client-projects/vasifycrm-frontend

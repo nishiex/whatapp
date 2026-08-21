@@ -1,0 +1,13 @@
+﻿{
+  "DB_HOST": "localhost",
+  "DB_USER": "root",
+  "DB_PASSWORD": "nishit560",
+  "DB_NAME": "vasify_crm_new_dev",
+  "JWT_SECRET": "abc123defghjklpoi70",
+  "JWT_EXPIRES_IN": "1d",
+  "FRONTEND_URL": "",
+  "NODE_ENV": "development",
+  "WHATSAPP_API_TOKEN": "kliu2IuLezqOxzzIuOXipDYaFnxubQ",
+  "WHATSAPP_PHONE_NUMBER_ID": "918955464054",
+  "ADMIN_PHONE_NUMBER": "918360280936,919928032781,919569622334"
+}
