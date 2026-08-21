@@ -136,13 +136,14 @@ function ToastContainer({ toasts }: { toasts: Toast[] }) {
   );
 }
 
-// ─── Delete confirm modal ─────────────────────────────────────────────────────
+// ─── Delete confirm modal (handles single AND bulk delete) ───────────────────
 
-function DeleteModal({ open, invoiceNumber, onConfirm, onCancel, loading }: {
-  open: boolean; invoiceNumber: string;
+function DeleteModal({ open, invoiceNumber, count, onConfirm, onCancel, loading }: {
+  open: boolean; invoiceNumber?: string; count?: number;
   onConfirm: () => void; onCancel: () => void; loading: boolean;
 }) {
   if (!open) return null;
+  const isBulk = !!count && count > 1;
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6">
@@ -150,11 +151,17 @@ function DeleteModal({ open, invoiceNumber, onConfirm, onCancel, loading }: {
           <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center">
             <Trash2 size={24} className="text-red-600" />
           </div>
-          <h3 className="text-base font-bold text-gray-900">Delete Invoice?</h3>
+          <h3 className="text-base font-bold text-gray-900">
+            {isBulk ? `Delete ${count} Invoices?` : 'Delete Invoice?'}
+          </h3>
           <p className="text-sm text-gray-500">
-            Are you sure you want to delete{' '}
-            <span className="font-bold text-gray-800">{invoiceNumber}</span>?
-            This cannot be undone.
+            {isBulk ? (
+              <>Are you sure you want to delete these <span className="font-bold text-gray-800">{count}</span> invoices? This cannot be undone.</>
+            ) : (
+              <>Are you sure you want to delete{' '}
+                <span className="font-bold text-gray-800">{invoiceNumber}</span>?
+                This cannot be undone.</>
+            )}
           </p>
         </div>
         <div className="flex gap-3 mt-6">
@@ -298,8 +305,8 @@ function KpiCard({ title, value, sub, icon, accent }: {
 
 // ─── Mobile invoice card (stacked layout, replaces table on small screens) ────
 
-function InvoiceCard({ inv, isOverdue, onStatusChange, onView, onEdit, onDelete, onDownload, onSendWhatsApp }: {
-  inv: any; isOverdue: boolean;
+function InvoiceCard({ inv, isOverdue, isSelected, onToggleSelect, onStatusChange, onView, onEdit, onDelete, onDownload, onSendWhatsApp }: {
+  inv: any; isOverdue: boolean; isSelected: boolean; onToggleSelect: () => void;
   onStatusChange: (id: string, status: string) => Promise<void>;
   onView: () => void; onEdit: () => void; onDelete: () => void; onDownload: () => void;
   onSendWhatsApp: () => void;
@@ -308,10 +315,18 @@ function InvoiceCard({ inv, isOverdue, onStatusChange, onView, onEdit, onDelete,
     <div
       onClick={onView}
       className={`p-4 border-b border-gray-100 last:border-0 active:bg-gray-50 transition-colors cursor-pointer
-        ${isOverdue ? 'bg-red-50/40' : ''}`}
+        ${isOverdue ? 'bg-red-50/40' : ''} ${isSelected ? 'bg-blue-50/50' : ''}`}
     >
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="flex items-center gap-2.5 min-w-0">
+          <div onClick={(e) => { e.stopPropagation(); onToggleSelect(); }} className="shrink-0">
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={onToggleSelect}
+              className="w-4 h-4 rounded accent-gray-900 cursor-pointer"
+            />
+          </div>
           <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center shrink-0">
             <span className="text-[11px] font-black text-white">
               {(inv.customerName || 'C').charAt(0).toUpperCase()}
@@ -377,6 +392,11 @@ export function InvoicesContent() {
   const [isDeleting,      setIsDeleting]      = useState(false);
   const [toasts,          setToasts]          = useState<Toast[]>([]);
 
+  // ── Multi-select state ───────────────────────────────────────────────────
+  const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen,  setBulkDeleteOpen]  = useState(false);
+  const [isBulkDeleting,  setIsBulkDeleting]  = useState(false);
+
   // ── Toast ─────────────────────────────────────────────────────────────────
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     const id = Date.now();
@@ -401,7 +421,7 @@ export function InvoicesContent() {
     }
   }, [updateInvoice, showToast]);
 
-  // ── Delete ────────────────────────────────────────────────────────────────
+  // ── Delete (single) ──────────────────────────────────────────────────────
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return;
     setIsDeleting(true);
@@ -506,11 +526,12 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
     await refreshData();
   }, [selectedInvoice, showToast, refreshData]);
 
-  // ── Export CSV ────────────────────────────────────────────────────────────
-  const handleExportCSV = () => {
-    if (!invoices.length) return;
+  // ── Export CSV (accepts an optional subset — used for bulk export) ────────
+  const handleExportCSV = useCallback((list?: any[]) => {
+    const rows_ = list ?? invoices;
+    if (!rows_.length) return;
     const headers = ['Invoice #','Customer','Amount','Tax %','Total','Status','Issue Date','Due Date'];
-    const rows = invoices.map(inv => [
+    const rows = rows_.map(inv => [
       inv.invoiceNumber, inv.customerName,
       Number(inv.amount).toFixed(2), Number(inv.tax),
       Number(inv.total).toFixed(2), inv.status,
@@ -524,7 +545,7 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
     }).click();
     URL.revokeObjectURL(url);
     showToast('CSV exported ✓');
-  };
+  }, [invoices, showToast]);
 
   // ── Filtered list ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -534,6 +555,73 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
       && (statusF === 'all' || inv.status === statusF)
     );
   }, [invoices, search, statusF]);
+
+  // ── Multi-select handlers ────────────────────────────────────────────────
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every(inv => selectedIds.has(inv.id));
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds(prev => {
+      if (filtered.length > 0 && filtered.every(inv => prev.has(inv.id))) {
+        const next = new Set(prev);
+        filtered.forEach(inv => next.delete(inv.id));
+        return next;
+      }
+      const next = new Set(prev);
+      filtered.forEach(inv => next.add(inv.id));
+      return next;
+    });
+  }, [filtered]);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  const selectedInvoices = useMemo(
+    () => invoices.filter(inv => selectedIds.has(inv.id)),
+    [invoices, selectedIds]
+  );
+
+  // ── Bulk actions ──────────────────────────────────────────────────────────
+  const handleBulkMarkPaid = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    await Promise.allSettled(ids.map(id => updateInvoice(id, { status: 'paid' } as any, { status: 'paid' })));
+    showToast(`${ids.length} invoice${ids.length !== 1 ? 's' : ''} marked as Paid`);
+    await refreshData();
+    clearSelection();
+  }, [selectedIds, updateInvoice, showToast, refreshData, clearSelection]);
+
+  const handleBulkWhatsApp = useCallback(async () => {
+    showToast(`Sending WhatsApp to ${selectedInvoices.length} customer${selectedInvoices.length !== 1 ? 's' : ''}…`);
+    for (const inv of selectedInvoices) {
+      await handleSendWhatsApp(inv);
+    }
+  }, [selectedInvoices, handleSendWhatsApp, showToast]);
+
+  const handleBulkExport = useCallback(() => {
+    handleExportCSV(selectedInvoices);
+  }, [handleExportCSV, selectedInvoices]);
+
+  const handleBulkDeleteConfirm = useCallback(async () => {
+    setIsBulkDeleting(true);
+    try {
+      const ids = Array.from(selectedIds);
+      await Promise.allSettled(ids.map(id => deleteInvoice(id)));
+      showToast(`${ids.length} invoice${ids.length !== 1 ? 's' : ''} deleted`);
+      setBulkDeleteOpen(false);
+      clearSelection();
+      await refreshData();
+    } catch {
+      showToast('Failed to delete some invoices', 'error');
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }, [selectedIds, deleteInvoice, showToast, clearSelection, refreshData]);
 
   // ── KPI stats ─────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -572,6 +660,14 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
         loading={isDeleting}
       />
 
+      <DeleteModal
+        open={bulkDeleteOpen}
+        count={selectedIds.size}
+        onConfirm={handleBulkDeleteConfirm}
+        onCancel={() => setBulkDeleteOpen(false)}
+        loading={isBulkDeleting}
+      />
+
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -588,7 +684,7 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
             className="p-2 border border-gray-200 rounded-xl text-gray-500 hover:bg-gray-50 disabled:opacity-50 transition-colors">
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
           </button>
-          <button onClick={handleExportCSV} disabled={!invoices.length}
+          <button onClick={() => handleExportCSV()} disabled={!invoices.length}
             className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors">
             <Download size={14} />
             <span className="hidden sm:inline">Export CSV</span>
@@ -647,6 +743,37 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
           </span>
         </div>
 
+        {/* Bulk action bar — shows when 1+ rows are selected */}
+        {selectedIds.size > 0 && (
+          <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-blue-50/60 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-bold text-gray-800">
+              {selectedIds.size} selected
+            </span>
+            <button onClick={clearSelection}
+              className="text-xs text-gray-500 hover:text-gray-700 underline underline-offset-2">
+              Clear
+            </button>
+            <div className="flex items-center gap-2 ml-auto flex-wrap">
+              <button onClick={handleBulkMarkPaid}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-gray-200 text-emerald-700 hover:bg-emerald-50 transition-colors">
+                <CheckCircle size={13} /> Mark as Paid
+              </button>
+              <button onClick={handleBulkWhatsApp}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-gray-200 text-green-700 hover:bg-green-50 transition-colors">
+                <MessageCircle size={13} /> Send WhatsApp
+              </button>
+              <button onClick={handleBulkExport}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors">
+                <Download size={13} /> Export CSV
+              </button>
+              <button onClick={() => setBulkDeleteOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-red-200 text-red-600 hover:bg-red-50 transition-colors">
+                <Trash2 size={13} /> Delete
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Empty state */}
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 sm:py-20 text-center px-4">
@@ -675,6 +802,8 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
                     key={inv.id}
                     inv={inv}
                     isOverdue={isOverdue}
+                    isSelected={selectedIds.has(inv.id)}
+                    onToggleSelect={() => toggleSelect(inv.id)}
                     onStatusChange={handleStatusChange}
                     onView={() => openDetail(inv)}
                     onEdit={() => openEdit(inv)}
@@ -691,7 +820,16 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="text-left text-xs font-bold text-gray-400 uppercase tracking-wide py-3 pl-5 pr-3">Invoice #</th>
+                    <th className="py-3 pl-5 pr-2 w-10">
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded accent-gray-900 cursor-pointer"
+                        aria-label="Select all invoices"
+                      />
+                    </th>
+                    <th className="text-left text-xs font-bold text-gray-400 uppercase tracking-wide py-3 px-3">Invoice #</th>
                     <th className="text-left text-xs font-bold text-gray-400 uppercase tracking-wide py-3 px-3">Customer</th>
                     <th className="text-right text-xs font-bold text-gray-400 uppercase tracking-wide py-3 px-3">Amount</th>
                     <th className="text-left text-xs font-bold text-gray-400 uppercase tracking-wide py-3 px-3">Status</th>
@@ -704,14 +842,25 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
                   {filtered.map(inv => {
                     const isOverdue = inv.status !== 'paid' && inv.status !== 'cancelled'
                       && inv.dueDate && new Date(inv.dueDate) < new Date();
+                    const isSelected = selectedIds.has(inv.id);
 
                     return (
                       <tr key={inv.id} onDoubleClick={() => openDetail(inv)}
                         className={`transition-colors cursor-pointer group
-                          ${isOverdue ? 'bg-red-50/40 hover:bg-red-50' : 'hover:bg-gray-50/60'}`}
+                          ${isSelected ? 'bg-blue-50/50 hover:bg-blue-50' : isOverdue ? 'bg-red-50/40 hover:bg-red-50' : 'hover:bg-gray-50/60'}`}
                       >
+                        {/* Checkbox */}
+                        <td className="pl-5 pr-2 py-3" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelect(inv.id)}
+                            className="w-4 h-4 rounded accent-gray-900 cursor-pointer"
+                          />
+                        </td>
+
                         {/* Invoice # */}
-                        <td className="pl-5 pr-3 py-3">
+                        <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
                             {isOverdue && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />}
                             <span className="font-mono font-bold text-gray-800">{inv.invoiceNumber || '—'}</span>
@@ -757,7 +906,7 @@ const handleSendWhatsApp = useCallback(async (inv: any) => {
                         {/* Actions — sticky so it's always reachable without horizontal scroll-hunting */}
                         <td
                           className={`pr-5 pl-3 py-3 sticky right-0 transition-colors
-                            ${isOverdue ? 'bg-red-50/40 group-hover:bg-red-50' : 'bg-white group-hover:bg-gray-50/60'}`}
+                            ${isSelected ? 'bg-blue-50/50 group-hover:bg-blue-50' : isOverdue ? 'bg-red-50/40 group-hover:bg-red-50' : 'bg-white group-hover:bg-gray-50/60'}`}
                           onClick={e => e.stopPropagation()}
                         >
                           <div className="flex items-center justify-end gap-1">

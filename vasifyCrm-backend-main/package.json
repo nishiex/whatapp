@@ -1,12 +1,13 @@
-{
+﻿{
   "name": "vasifytech-crm-backend",
   "version": "1.0.0",
   "description": "Backend API for VasifyTech CRM System",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "migrate:add-whatsapp": "node scripts/add-whatsapp-columns.js",
+    "migrate": "node scripts/migrate.js",
     "dev": "nodemon server.js",
-    "migrate": "node scripts/migrate.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "axios": "^1.6.2",
