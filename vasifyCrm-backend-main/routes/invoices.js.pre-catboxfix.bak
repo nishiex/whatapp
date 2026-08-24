@@ -385,19 +385,29 @@ Vasify Technologies Support Team`;
         }
       );
 
-      const uploadResponseText = (await uploadRes.text()).trim();
+      const uploadResponseText =
+        (await uploadRes.text()).trim();
 
-      console.log("[WhatsApp Document] Catbox response (raw):", uploadResponseText);
+      console.log(
+        "[WhatsApp Document] Catbox response:",
+        uploadResponseText
+      );
 
-      // Try to extract a valid URL from the response.
-      const urlMatch = uploadResponseText.match(/https?:\/\/[^\s'")>\]]+/i);
-      if (uploadRes.ok && urlMatch) {
-        // strip stray wrapping chars like <>, () or trailing punctuation
-        let extracted = urlMatch[0].replace(/^[<(]+|[>)\].,;:]+$/g, "").trim();
-        mediaUrl = extracted;
-        console.log("[WhatsApp Document] Extracted public PDF URL:", mediaUrl);
+      if (
+        uploadRes.ok &&
+        /^https?:\/\//i.test(uploadResponseText)
+      ) {
+        mediaUrl = uploadResponseText;
+
+        console.log(
+          "[WhatsApp Document] Public PDF URL:",
+          mediaUrl
+        );
       } else {
-        console.error("[WhatsApp Document] Invalid Catbox response (no URL found):", uploadResponseText);
+        console.error(
+          "[WhatsApp Document] Invalid Catbox response:",
+          uploadResponseText
+        );
       }
 
     } catch (uploadError) {
@@ -615,11 +625,6 @@ try {
     pdfUrl: mediaUrl,
   });
 }
-
-// Masked fromNumber log to help debugging (last 4 digits)
-const maskedFrom = (fromNumber && fromNumber.length > 4) ? '***' + fromNumber.slice(-4) : (fromNumber || '(empty)');
-console.log('[WhatsApp Document] fromNumber (masked):', maskedFrom);
-
 const docPayload = {
   recipient_type: "individual",
   from: fromNumber,

@@ -385,19 +385,29 @@ Vasify Technologies Support Team`;
         }
       );
 
-      const uploadResponseText = (await uploadRes.text()).trim();
+      const uploadResponseText =
+        (await uploadRes.text()).trim();
 
-      console.log("[WhatsApp Document] Catbox response (raw):", uploadResponseText);
+      console.log(
+        "[WhatsApp Document] Catbox response:",
+        uploadResponseText
+      );
 
-      // Try to extract a valid URL from the response.
-      const urlMatch = uploadResponseText.match(/https?:\/\/[^\s'")>\]]+/i);
-      if (uploadRes.ok && urlMatch) {
-        // strip stray wrapping chars like <>, () or trailing punctuation
-        let extracted = urlMatch[0].replace(/^[<(]+|[>)\].,;:]+$/g, "").trim();
-        mediaUrl = extracted;
-        console.log("[WhatsApp Document] Extracted public PDF URL:", mediaUrl);
+      if (
+        uploadRes.ok &&
+        /^https?:\/\//i.test(uploadResponseText)
+      ) {
+        mediaUrl = uploadResponseText;
+
+        console.log(
+          "[WhatsApp Document] Public PDF URL:",
+          mediaUrl
+        );
       } else {
-        console.error("[WhatsApp Document] Invalid Catbox response (no URL found):", uploadResponseText);
+        console.error(
+          "[WhatsApp Document] Invalid Catbox response:",
+          uploadResponseText
+        );
       }
 
     } catch (uploadError) {
@@ -545,82 +555,7 @@ console.log(
 );
 console.log("==================================");
 
-  
-// ------------------------------------------------------------
-// 9. VALIDATE PUBLIC PDF URL
-// ------------------------------------------------------------
-
-mediaUrl = (mediaUrl || "").trim();
-
-try {
-  const parsedUrl = new URL(mediaUrl);
-
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error("PDF URL must use HTTPS");
-  }
-
-  // Normalize the URL
-  mediaUrl = parsedUrl.toString();
-
-  console.log("========== AOC PDF URL DEBUG ==========");
-  console.log("mediaUrl:", mediaUrl);
-  console.log("protocol:", parsedUrl.protocol);
-  console.log("hostname:", parsedUrl.hostname);
-  console.log("=======================================");
-
-} catch (urlError) {
-  console.error(
-    "[WhatsApp Document] Invalid PDF URL:",
-    mediaUrl,
-    urlError.message
-  );
-
-  return res.status(500).json({
-    error: true,
-    message: "Invoice PDF URL is not a valid public HTTPS URL.",
-    details: urlError.message,
-  });
-}
-
-// ------------------------------------------------------------
-// 10. VERIFY PDF IS ACTUALLY ACCESSIBLE
-// ------------------------------------------------------------
-try {
-  const pdfCheck = await fetch(mediaUrl, {
-    method: "GET",
-  });
-
-  if (!pdfCheck.ok) {
-    throw new Error("PDF URL returned HTTP " + pdfCheck.status);
-  }
-
-  const contentType = pdfCheck.headers.get("content-type") || "";
-
-  console.log("[WhatsApp Document] PDF Content-Type:", contentType);
-
-  if (!contentType.toLowerCase().includes("pdf")) {
-    throw new Error("URL did not return a PDF. Content-Type: " + contentType);
-  }
-
-} catch (pdfCheckError) {
-  console.error(
-    "[WhatsApp Document] PDF URL verification failed:",
-    pdfCheckError.message
-  );
-
-  return res.status(500).json({
-    error: true,
-    message: "Invoice PDF URL is not accessible or does not return a PDF.",
-    details: pdfCheckError.message,
-    pdfUrl: mediaUrl,
-  });
-}
-
-// Masked fromNumber log to help debugging (last 4 digits)
-const maskedFrom = (fromNumber && fromNumber.length > 4) ? '***' + fromNumber.slice(-4) : (fromNumber || '(empty)');
-console.log('[WhatsApp Document] fromNumber (masked):', maskedFrom);
-
-const docPayload = {
+  const docPayload = {
   recipient_type: "individual",
   from: fromNumber,
   to: recipient,
@@ -1612,4 +1547,3 @@ router.delete("/:id", authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
-

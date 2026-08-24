@@ -1,0 +1,76 @@
+﻿const fs = require('fs');
+const p = 'vasifyCrm-backend-main/routes/invoices.js';
+const bak = p + '.pre-catboxfix.bak';
+fs.copyFileSync(p, bak);
+let s = fs.readFileSync(p, 'utf8');
+
+const startMarker = 'const uploadResponseText';
+const endMarker = '    } catch (uploadError) {';
+let startIdx = s.indexOf(startMarker);
+if (startIdx === -1) {
+  console.error('startMarker not found');
+  process.exit(1);
+}
+let endIdx = s.indexOf(endMarker, startIdx);
+if (endIdx === -1) {
+  console.error('endMarker not found');
+  process.exit(1);
+}
+
+// Build replacement content
+const replacement = `const uploadResponseText = (await uploadRes.text()).trim();
+
+      console.log("[WhatsApp Document] Catbox response (raw):", uploadResponseText);
+
+      // Try to extract a valid URL from the response.
+      const urlMatch = uploadResponseText.match(/https?:\\/\\/[^\\s'\")>\\]]+/i);
+      if (uploadRes.ok && urlMatch) {
+        // strip stray wrapping chars like <>, () or trailing punctuation
+        let extracted = urlMatch[0].replace(/^[<(]+|[>)\\].,;:]+$/g, "").trim();
+        mediaUrl = extracted;
+        console.log("[WhatsApp Document] Extracted public PDF URL:", mediaUrl);
+      } else {
+        console.error("[WhatsApp Document] Invalid Catbox response (no URL found):", uploadResponseText);
+      }
+
+`;
+
+const before = s.slice(0, startIdx);
+const after = s.slice(endIdx);
+let newS = before + replacement + after;
+
+// Now insert masked fromNumber log before the second occurrence of 'const docPayload = {'
+const docMarker = 'const docPayload = {';
+const firstDoc = newS.indexOf(docMarker);
+const secondDoc = newS.indexOf(docMarker, firstDoc + 1);
+let insertPos;
+if (secondDoc !== -1) {
+  insertPos = secondDoc;
+} else if (firstDoc !== -1) {
+  insertPos = firstDoc;
+} else {
+  console.error('docPayload marker not found');
+  process.exit(1);
+}
+
+const maskedLog = `
+// Masked fromNumber log to help debugging (last 4 digits)
+const maskedFrom = (fromNumber && fromNumber.length > 4) ? '***' + fromNumber.slice(-4) : (fromNumber || '(empty)');
+console.log('[WhatsApp Document] fromNumber (masked):', maskedFrom);
+
+`;
+
+newS = newS.slice(0, insertPos) + maskedLog + newS.slice(insertPos);
+
+// Write back
+fs.writeFileSync(p, newS, 'utf8');
+console.log('Patched invoices.js; backup saved at', bak);
+
+// Syntax check
+try {
+  new Function(newS);
+  console.log('SYNTAX OK');
+} catch (e) {
+  console.error('SYNTAX ERROR:', e && e.message);
+  process.exit(1);
+}
