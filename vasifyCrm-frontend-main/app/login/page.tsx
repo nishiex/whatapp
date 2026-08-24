@@ -227,6 +227,7 @@ export default function LoginPage(): JSX.Element {
       // "Access token required" even immediately after a successful login.
       if (data.token) {
         localStorage.setItem('auth_token', data.token);
+        localStorage.setItem('token', data.token);
       }
 
       if (data.user) {
