@@ -25,7 +25,7 @@ const MAIN_NAV = [
   { name: "Dashboard", href: "/",          icon: LayoutDashboard },
   { name: "Leads",     href: "/leads",     icon: UserPlus },
   { name: "Clients",   href: "/customers", icon: Users },
-  { name: "dev",     href: "/dev-task",     icon: UserCog },
+  // { name: "dev",     href: "/dev-task",     icon: UserCog },
   { name: "Retainers", href: "/retainers", icon: RefreshCw },
   { name: "Invoices",  href: "/invoices",  icon: ReceiptIndianRupee },
   { name: "Reports",   href: "/reports",   icon: BarChart3 },
