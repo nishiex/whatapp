@@ -11,5 +11,6 @@
   "AOC_FROM_NUMBER": "+919769026133",
   "ADMIN_PHONE_NUMBER": "918360280936,919928032781,919569622334",
   "PDF_LINK_SECRET": "change-me_pdf_link_secret",
-  "PDF_LINK_TTL": "15m"
+  "PDF_LINK_TTL": "15m",
+  "FILE_UPLOAD_URL": "https://catbox.moe/user/api.php"
 }

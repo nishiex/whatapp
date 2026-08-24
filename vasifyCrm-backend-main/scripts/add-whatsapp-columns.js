@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
-require('dotenv').config();
+// Load env exactly like server.js so this targets the SAME DB the app uses
+// (env/<NODE_ENV>.json), not the hardcoded fallbacks in config/database.js.
+process.env.NODE_ENV = process.env.NODE_ENV || "development";
+try { require("dotenv").config(); } catch (_) {}
+Object.assign(process.env, require(`../env/${process.env.NODE_ENV}.json`));
+
 const { pool } = require('../config/database');
 
 async function columnExists(dbName, tableName, columnName) {
@@ -19,7 +24,7 @@ async function addColumn(tableName, columnDef) {
 
 async function main() {
   try {
-    const dbName = process.env.DB_NAME || 'vasifytech_dev';
+    const dbName = process.env.DB_NAME || 'vasify_crm_new_dev';
     const table = 'invoices';
     const columns = [
       { name: 'whatsapp_sent', def: "`whatsapp_sent` TINYINT(1) NOT NULL DEFAULT 0" },

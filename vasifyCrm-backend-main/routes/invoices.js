@@ -5,8 +5,17 @@ const express                    = require("express");
 const { body, validationResult } = require("express-validator");
 const { pool }                   = require("../config/database");
 const { authenticateToken }      = require("../middleware/auth");
+const { uploadFileToPublicUrl }  = require("../config/fileUploader");
+
+const crypto = require("crypto");
 
 const router = express.Router();
+
+// Mask a phone number for logs, keeping only the last 4 digits.
+const maskPhone = (phone) => {
+  const digits = String(phone || "").replace(/\D/g, "");
+  return digits.length > 4 ? `***${digits.slice(-4)}` : "(hidden)";
+};
 
 
 
@@ -18,8 +27,80 @@ const AOC_WHATSAPP_URL =
 const AOC_FROM_NUMBER =
   process.env.AOC_FROM_NUMBER || "+919769026133";
 
+// Approved WhatsApp template used to OPEN the conversation before sending the
+// invoice PDF (free-form messages only deliver within 24h of the customer's
+// last message; approved templates deliver anytime). Override per environment.
 const WHATSAPP_TEMPLATE_NAME =
-  "invoice_ready_notification";
+  process.env.WHATSAPP_TEMPLATE_NAME || "invoice_ready_notification";
+
+const WHATSAPP_TEMPLATE_LANG =
+  process.env.WHATSAPP_TEMPLATE_LANG || "en";
+
+// When true (default), the invoice PDF is delivered INSIDE the approved
+// template's document header — a single compliant message that works even when
+// no 24h session window is open. This is the correct WhatsApp cold-send path.
+// Set WHATSAPP_TEMPLATE_HAS_DOCUMENT_HEADER=false only if the approved template
+// on the AOC/Meta portal has NO document header, in which case we fall back to
+// the legacy template-then-separate-document behaviour.
+const TEMPLATE_HAS_DOCUMENT_HEADER =
+  String(process.env.WHATSAPP_TEMPLATE_HAS_DOCUMENT_HEADER ?? "true")
+    .trim()
+    .toLowerCase() !== "false";
+
+// Public base URL of THIS backend (origin only, no path), used to build the
+// self-hosted PDF link that WhatsApp/Meta fetches. Must be an internet-reachable
+// HTTPS origin, e.g. https://crm-api.vasifytech.com. When empty (e.g. local dev,
+// where Meta cannot reach localhost) self-hosting is disabled and the send falls
+// back to the external uploader.
+const PUBLIC_API_BASE_URL = (
+  process.env.PUBLIC_API_BASE_URL ||
+  process.env.PUBLIC_BASE_URL ||
+  ""
+).replace(/\/+$/, "");
+
+// Secret + TTL for signing the short-lived public PDF link. The link is
+// unauthenticated (Meta cannot send a bearer token) but is HMAC-signed and
+// time-limited so it cannot be forged or replayed indefinitely.
+const PDF_LINK_SECRET =
+  process.env.PDF_LINK_SECRET || process.env.JWT_SECRET || "";
+
+// Parse "15m" / "2h" / "3600" (seconds) into milliseconds. Defaults to 15m.
+const parseTtlMs = (raw) => {
+  const s = String(raw ?? "15m").trim();
+  const m = s.match(/^(\d+)\s*(ms|s|m|h|d)?$/i);
+  if (!m) return 15 * 60 * 1000;
+  const n = Number(m[1]);
+  const unit = (m[2] || "s").toLowerCase();
+  const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 }[unit];
+  return n * mult;
+};
+
+const PDF_LINK_TTL_MS = parseTtlMs(process.env.PDF_LINK_TTL);
+
+// Build the canonical string that gets HMAC-signed for a PDF link.
+const pdfLinkSigningString = (invoiceId, expiresAt) => `${invoiceId}.${expiresAt}`;
+
+const signPdfLink = (invoiceId, expiresAt) =>
+  crypto
+    .createHmac("sha256", PDF_LINK_SECRET)
+    .update(pdfLinkSigningString(invoiceId, expiresAt))
+    .digest("hex");
+
+// Constant-time compare that never throws on length mismatch.
+const safeEqualHex = (a, b) => {
+  const ba = Buffer.from(String(a || ""), "utf8");
+  const bb = Buffer.from(String(b || ""), "utf8");
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+};
+
+// Build the full public, Meta-fetchable HTTPS URL for an invoice PDF.
+const buildPublicPdfUrl = (invoiceId) => {
+  const expiresAt = Date.now() + PDF_LINK_TTL_MS;
+  const sig = signPdfLink(invoiceId, expiresAt);
+  const qs = new URLSearchParams({ e: String(expiresAt), s: sig }).toString();
+  return `${PUBLIC_API_BASE_URL}/api/invoices/${encodeURIComponent(invoiceId)}/public-pdf?${qs}`;
+};
 
 // router.post("/:id/send-whatsapp", authenticateToken, async (req, res) => {
 //   try {
@@ -348,77 +429,51 @@ Thank you for your continued trust in us.
 Vasify Technologies Support Team`;
 
     // ------------------------------------------------------------
-    // 8. UPLOAD PDF TO PUBLIC HTTPS URL
+    // 8. RESOLVE A META-FETCHABLE PDF URL
     // ------------------------------------------------------------
     //
-    // AOC requires document.link to be an HTTP/HTTPS URL.
-    // We DO NOT use:
+    // The PDF is delivered inside the template's document header, so Meta must
+    // be able to download it over HTTPS. Preference order:
+    //   1. Self-hosted signed link (reliable; served by GET /:id/public-pdf).
+    //   2. External uploader (catbox) as a fallback — used when the signing
+    //      secret is unset or the self-hosted base is not internet-reachable
+    //      (e.g. local dev, where Meta cannot reach localhost).
     //
-    // data:application/pdf;base64,...
-    //
+    // catbox intermittently fails Meta's fetch with error 131053
+    // ("no media found from weblink"), so self-hosting is strongly preferred.
     // ------------------------------------------------------------
 
     let mediaUrl = null;
+    let mediaSource = null;
 
-    try {
-      const formData = new FormData();
-
-      formData.append(
-        "reqtype",
-        "fileupload"
-      );
-
-      formData.append(
-        "fileToUpload",
-        new Blob(
-          [pdfBuffer],
-          { type: "application/pdf" }
-        ),
-        pdfFilename
-      );
-
-      const uploadRes = await fetch(
-        "https://0x0.st/",
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
-
-      const uploadResponseText = (await uploadRes.text()).trim();
-
-      console.log("[WhatsApp Document] 0x0.st response (raw):", uploadResponseText);
-
-      // Try to extract a valid URL from the response.
-      const urlMatch = uploadResponseText.match(/https?:\/\/[^\s'")>\]]+/i);
-      if (uploadRes.ok && urlMatch) {
-        // strip stray wrapping chars like <>, () or trailing punctuation
-        let extracted = urlMatch[0].replace(/^[<(]+|[>)\].,;:]+$/g, "").trim();
-        mediaUrl = extracted;
-        console.log("[WhatsApp Document] Extracted public PDF URL:", mediaUrl);
-      } else {
-        console.error("[WhatsApp Document] Invalid 0x0.st response (no URL found):", uploadResponseText);
+    if (PDF_LINK_SECRET && /^https:\/\//i.test(PUBLIC_API_BASE_URL)) {
+      mediaUrl = buildPublicPdfUrl(id);
+      mediaSource = "self-hosted";
+      console.log("[WhatsApp Document] Using self-hosted signed PDF URL.");
+    } else {
+      try {
+        const uploadResult = await uploadFileToPublicUrl(
+          pdfBuffer,
+          pdfFilename,
+          "application/pdf"
+        );
+        mediaUrl = uploadResult.url;
+        mediaSource = "external";
+        console.log("[WhatsApp Document] Uploaded invoice PDF to public URL:", mediaUrl);
+      } catch (uploadError) {
+        console.error("[WhatsApp Document] PDF upload failed:", uploadError.message);
       }
-
-    } catch (uploadError) {
-      console.error(
-        "[WhatsApp Document] PDF upload failed:",
-        uploadError
-      );
     }
 
     // ------------------------------------------------------------
     // 9. MAKE SURE WE HAVE A VALID HTTPS URL
     // ------------------------------------------------------------
 
-    if (
-      !mediaUrl ||
-      !/^https?:\/\//i.test(mediaUrl)
-    ) {
+    if (!mediaUrl || !/^https:\/\//i.test(mediaUrl)) {
       return res.status(500).json({
         error: true,
         message:
-          "Invoice PDF could not be uploaded to a public HTTPS URL. WhatsApp message was not sent.",
+          "Invoice PDF could not be published to a public HTTPS URL. WhatsApp message was not sent.",
       });
     }
 
@@ -442,10 +497,13 @@ Vasify Technologies Support Team`;
       });
     }
 
+    // Single WhatsApp sender for the whole app: AOC_FROM_NUMBER (919769026133).
+    // The WHATSAPP_PHONE_NUMBER_ID fallback was removed — it pointed at a
+    // different, unregistered number (918955464054) and produced inconsistent
+    // senders between code paths.
     const fromNumber = (
       process.env.AOC_FROM_NUMBER ||
-      process.env.WHATSAPP_PHONE_NUMBER_ID ||
-      ""
+      "+919769026133"
     ).replace(/\+/g, "");
 
     if (!fromNumber) {
@@ -457,300 +515,312 @@ Vasify Technologies Support Team`;
     }
 
     // ------------------------------------------------------------
-    // 11. SEND TEXT MESSAGE
+    // 11. OPEN THE CONVERSATION (template first, text as fallback)
+    // ------------------------------------------------------------
+    //
+    // WhatsApp only delivers free-form ("session") messages within 24h of the
+    // customer's last message. An approved TEMPLATE can be delivered anytime and
+    // opens the 24h window so the PDF document that follows is delivered too.
+    //
+    // Strategy:
+    //   1. Send the approved template (invoice_ready_notification).
+    //   2. If AOC rejects it (e.g. the template's placeholder count differs from
+    //      what we send), fall back to the free-form text — which still delivers
+    //      inside an open 24h session window.
+    //   3. Either way, continue to the PDF document (section 13). The opening
+    //      message is best-effort; the PDF send determines overall success.
     // ------------------------------------------------------------
 
-    const textPayload = {
+    // Body placeholders, sent in this order. These MUST match the {{1}}, {{2}}…
+    // defined in the approved "invoice_ready_notification" template on the AOC
+    // portal. The default order (name, invoice #, date, total) matches the
+    // 4-parameter payload the AOC template probes in scratch/ were built against.
+    // Override the order/values via WHATSAPP_TEMPLATE_PARAMS (pipe-separated),
+    // or set it to an empty string if the template has no body placeholders.
+    // Supported tokens: {{name}} {{invoice}} {{order}} {{date}} {{total}}.
+    const templateTokens = {
+      "{{name}}": customerName,
+      "{{invoice}}": invoiceNumber,
+      "{{order}}": orderNumber || "",
+      "{{date}}": issueDateFormatted,
+      "{{total}}": formattedTotal,
+    };
+
+    const templateParams =
+      process.env.WHATSAPP_TEMPLATE_PARAMS !== undefined
+        ? process.env.WHATSAPP_TEMPLATE_PARAMS
+            .split("|")
+            .map((raw) => {
+              const key = raw.trim();
+              return Object.prototype.hasOwnProperty.call(templateTokens, key)
+                ? String(templateTokens[key])
+                : key;
+            })
+            .filter((v) => v.length > 0)
+        : [customerName, invoiceNumber, issueDateFormatted, formattedTotal];
+
+    // AOC portal template format (top-level templateName + language + components),
+    // matching scratch/probe_aoc_header_components.js. This differs from the Meta
+    // Cloud API's nested `template` object; the AOC gateway expects this flattened
+    // shape.
+    //
+    // The invoice PDF rides in the template's DOCUMENT HEADER — this is the ONLY
+    // compliant way to deliver a document to a customer OUTSIDE the 24h session
+    // window (a business-initiated template does NOT open that window, so a
+    // trailing free-form document is rejected with error 131047).
+    //
+    // REQUIREMENT: the "invoice_ready_notification" template must be approved on
+    // the AOC/Meta portal WITH a document header. If it is body-only, set
+    // WHATSAPP_TEMPLATE_HAS_DOCUMENT_HEADER=false (the PDF is then sent as a
+    // separate document, which only delivers inside an open 24h window).
+    const templateComponents = [];
+
+    if (TEMPLATE_HAS_DOCUMENT_HEADER) {
+      templateComponents.push({
+        type: "header",
+        parameters: [
+          {
+            type: "document",
+            document: { link: mediaUrl, filename: pdfFilename },
+          },
+        ],
+      });
+    }
+
+    if (templateParams.length) {
+      templateComponents.push({
+        type: "body",
+        parameters: templateParams.map((text) => ({
+          type: "text",
+          text: String(text),
+        })),
+      });
+    }
+
+    const templatePayload = {
       recipient_type: "individual",
       from: fromNumber,
       to: recipient,
-      type: "text",
-      text: {
-        body: messageText,
-      },
+      type: "template",
+      templateName: WHATSAPP_TEMPLATE_NAME,
+      language: { code: WHATSAPP_TEMPLATE_LANG },
+      ...(templateComponents.length ? { components: templateComponents } : {}),
     };
 
-    let textResponse;
-    let textResponseBody = "";
+    // Diagnostics captured from AOC so we can surface WHY a send failed. Returned
+    // only when NODE_ENV !== production. from is masked; no keys are included.
+    const aocDebug = {
+      from: maskPhone(fromNumber),
+      mediaSource,
+      template: null,
+      text: null,
+      document: null,
+    };
 
-    try {
-      textResponse = await fetch(
-        AOC_WHATSAPP_URL,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: apiKey,
-          },
-          body: JSON.stringify(textPayload),
-        }
-      );
-
-      textResponseBody =
-        await textResponse.text();
-
-      console.log(
-        "[WhatsApp Text] Status:",
-        textResponse.status
-      );
-
-      console.log(
-        "[WhatsApp Text] Response:",
-        textResponseBody
-      );
-
-    } catch (textError) {
-      console.error(
-        "[WhatsApp Text] Send failed:",
-        textError
-      );
-
-      return res.status(500).json({
-        error: true,
-        message:
-          "Failed to send WhatsApp text message.",
-        details: textError.message,
+    // POST a payload to the AOC gateway and normalize the response.
+    const postAoc = async (payload) => {
+      const resp = await fetch(AOC_WHATSAPP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: apiKey },
+        body: JSON.stringify(payload),
       });
-    }
-
-    // ------------------------------------------------------------
-    // 12. CHECK TEXT RESPONSE
-    // ------------------------------------------------------------
-
-    if (!textResponse.ok) {
-      return res.status(textResponse.status || 500).json({
-        error: true,
-        message:
-          "AOC WhatsApp text message failed.",
-        details: textResponseBody,
-      });
-    }
-
-    // ------------------------------------------------------------
-    // 13. SEND PDF DOCUMENT
-    // ------------------------------------------------------------
-    //
-    // IMPORTANT:
-    // No caption here.
-    //
-    // AOC document media requires an HTTP/HTTPS link.
-    // ------------------------------------------------------------
-console.log("========== AOC PDF DEBUG ==========");
-console.log("mediaUrl:", mediaUrl);
-console.log("mediaUrl type:", typeof mediaUrl);
-console.log("mediaUrl length:", mediaUrl?.length);
-console.log(
-  "is HTTPS:",
-  /^https:\/\//i.test(mediaUrl || "")
-);
-console.log("==================================");
-
-  
-// ------------------------------------------------------------
-// 9. VALIDATE PUBLIC PDF URL
-// ------------------------------------------------------------
-
-mediaUrl = (mediaUrl || "").trim();
-
-try {
-  const parsedUrl = new URL(mediaUrl);
-
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error("PDF URL must use HTTPS");
-  }
-
-  // Normalize the URL
-  mediaUrl = parsedUrl.toString();
-
-  console.log("========== AOC PDF URL DEBUG ==========");
-  console.log("mediaUrl:", mediaUrl);
-  console.log("protocol:", parsedUrl.protocol);
-  console.log("hostname:", parsedUrl.hostname);
-  console.log("=======================================");
-
-} catch (urlError) {
-  console.error(
-    "[WhatsApp Document] Invalid PDF URL:",
-    mediaUrl,
-    urlError.message
-  );
-
-  return res.status(500).json({
-    error: true,
-    message: "Invoice PDF URL is not a valid public HTTPS URL.",
-    details: urlError.message,
-  });
-}
-
-// ------------------------------------------------------------
-// 10. VERIFY PDF IS ACTUALLY ACCESSIBLE
-// ------------------------------------------------------------
-try {
-  const pdfCheck = await fetch(mediaUrl, {
-    method: "GET",
-  });
-
-  if (!pdfCheck.ok) {
-    throw new Error("PDF URL returned HTTP " + pdfCheck.status);
-  }
-
-  const contentType = pdfCheck.headers.get("content-type") || "";
-
-  console.log("[WhatsApp Document] PDF Content-Type:", contentType);
-
-  if (!contentType.toLowerCase().includes("pdf")) {
-    throw new Error("URL did not return a PDF. Content-Type: " + contentType);
-  }
-
-} catch (pdfCheckError) {
-  console.error(
-    "[WhatsApp Document] PDF URL verification failed:",
-    pdfCheckError.message
-  );
-
-  return res.status(500).json({
-    error: true,
-    message: "Invoice PDF URL is not accessible or does not return a PDF.",
-    details: pdfCheckError.message,
-    pdfUrl: mediaUrl,
-  });
-}
-
-// Masked fromNumber log to help debugging (last 4 digits)
-const maskedFrom = (fromNumber && fromNumber.length > 4) ? '***' + fromNumber.slice(-4) : (fromNumber || '(empty)');
-console.log('[WhatsApp Document] fromNumber (masked):', maskedFrom);
-
-const docPayload = {
-  recipient_type: "individual",
-  from: fromNumber,
-  to: recipient,
-  type: "document",
-  document: {
-    link: mediaUrl,
-  },
-};
-
-    console.log(
-      "[WhatsApp Document] Sending PDF:",
-      {
-        recipient,
-        filename: pdfFilename,
-        mediaUrl,
+      const bodyText = await resp.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(bodyText);
+      } catch {
+        parsed = { raw: bodyText };
       }
-    );
+      return { ok: resp.ok, status: resp.status, bodyText, parsed };
+    };
 
-    let documentResponse;
-    let documentResponseBody = "";
+    // Mark the invoice as sent. Never throws — a failed status write must not
+    // fail the request, because the WhatsApp message was already delivered.
+    const markSent = async (statusValue) => {
+      try {
+        await pool.execute(
+          `UPDATE invoices
+             SET whatsapp_sent = 1, whatsapp_sent_at = NOW(), whatsapp_status = ?
+           WHERE id = ?`,
+          sanitize(statusValue, id)
+        );
+      } catch (updateErr) {
+        console.warn("WhatsApp database status update failed:", updateErr.message);
+      }
+    };
+
+    // ============================================================
+    // 12. SEND
+    // ============================================================
+    //
+    // Preferred path (TEMPLATE_HAS_DOCUMENT_HEADER): a SINGLE approved template
+    // whose document header carries the invoice PDF. This is the only compliant
+    // cold-send — it delivers the message text and the PDF in one shot, with no
+    // dependency on an open 24h session window.
+    //
+    // Legacy path: template/text opens the window, then the PDF is sent as a
+    // separate free-form document (only delivers inside an open window).
+    // ------------------------------------------------------------
+
+    if (TEMPLATE_HAS_DOCUMENT_HEADER) {
+      let tpl;
+      try {
+        tpl = await postAoc(templatePayload);
+      } catch (err) {
+        aocDebug.template = { status: 0, error: err.message };
+        console.error("[WhatsApp Template+PDF] Send error:", err.message);
+        return res.status(502).json({
+          error: true,
+          message: "Failed to reach the WhatsApp gateway while sending the invoice.",
+          ...(process.env.NODE_ENV !== "production" ? { aoc: aocDebug } : {}),
+        });
+      }
+
+      aocDebug.template = { status: tpl.status, body: tpl.bodyText.slice(0, 500) };
+      console.log(`[WhatsApp Template+PDF] "${WHATSAPP_TEMPLATE_NAME}" status:`, tpl.status);
+
+      if (!tpl.ok) {
+        console.error("[WhatsApp Template+PDF] Rejected by AOC:", tpl.bodyText);
+        return res.status(tpl.status || 502).json({
+          error: true,
+          message:
+            "WhatsApp rejected the invoice template. Confirm the approved template name, language, " +
+            "body placeholder count, and that it has a document header (see the WHATSAPP_TEMPLATE_* env vars).",
+          details: tpl.bodyText,
+          ...(process.env.NODE_ENV !== "production" ? { aoc: aocDebug } : {}),
+        });
+      }
+
+      await markSent("sent");
+
+      return res.status(200).json({
+        error: false,
+        message: "Invoice message and PDF sent successfully via WhatsApp.",
+        data: tpl.parsed,
+        whatsapp: {
+          recipient,
+          via: "template+document-header",
+          pdfSent: true,
+          mediaSource,
+          filename: pdfFilename,
+          status: "sent",
+        },
+      });
+    }
+
+    // ---------- Legacy path: open the window, then send a separate document ----------
+
+    let openingSent = false;
+    let openingVia = null;
 
     try {
-      documentResponse = await fetch(
-        AOC_WHATSAPP_URL,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: apiKey,
-          },
-          body: JSON.stringify(docPayload),
+      const tpl = await postAoc(templatePayload);
+      aocDebug.template = { status: tpl.status, body: tpl.bodyText.slice(0, 500) };
+      console.log(`[WhatsApp Template] "${WHATSAPP_TEMPLATE_NAME}" status:`, tpl.status);
+      if (tpl.ok) {
+        openingSent = true;
+        openingVia = "template";
+      } else {
+        console.warn("[WhatsApp Template] Rejected — falling back to free-form text:", tpl.bodyText);
+      }
+    } catch (err) {
+      aocDebug.template = { status: 0, error: err.message };
+      console.warn("[WhatsApp Template] Send error — falling back to free-form text:", err.message);
+    }
+
+    // Fallback: free-form text (only delivers inside an open 24h session window)
+    if (!openingSent) {
+      const textPayload = {
+        recipient_type: "individual",
+        from: fromNumber,
+        to: recipient,
+        type: "text",
+        text: { body: messageText },
+      };
+      try {
+        const txt = await postAoc(textPayload);
+        aocDebug.text = { status: txt.status, body: txt.bodyText.slice(0, 500) };
+        console.log("[WhatsApp Text] Fallback status:", txt.status);
+        if (txt.ok) {
+          openingSent = true;
+          openingVia = "text";
+        } else {
+          console.warn("[WhatsApp Text] Fallback failed:", txt.bodyText);
         }
-      );
+      } catch (err) {
+        aocDebug.text = { status: 0, error: err.message };
+        console.warn("[WhatsApp Text] Fallback send error:", err.message);
+      }
+    }
 
-      documentResponseBody =
-        await documentResponse.text();
-
-      console.log(
-        "[WhatsApp Document] Status:",
-        documentResponse.status
-      );
-
-      console.log(
-        "[WhatsApp Document] Response:",
-        documentResponseBody
-      );
-
-    } catch (documentError) {
+    if (!openingSent) {
       console.error(
-        "[WhatsApp Document] Send failed:",
-        documentError
+        "[WhatsApp] Could not open the conversation (template + text both failed).",
+        JSON.stringify(aocDebug)
       );
-
-      return res.status(500).json({
+      return res.status(502).json({
         error: true,
         message:
-          "WhatsApp text was sent, but the invoice PDF failed to send.",
+          "WhatsApp could not open the conversation. The approved template was rejected and no active 24h session window exists, so the invoice was not sent.",
+        ...(process.env.NODE_ENV !== "production" ? { aoc: aocDebug } : {}),
+      });
+    }
+
+    const maskedFrom =
+      fromNumber && fromNumber.length > 4 ? "***" + fromNumber.slice(-4) : fromNumber || "(empty)";
+    console.log("[WhatsApp Document] fromNumber (masked):", maskedFrom);
+
+    const docPayload = {
+      recipient_type: "individual",
+      from: fromNumber,
+      to: recipient,
+      type: "document",
+      document: { link: mediaUrl, filename: pdfFilename },
+    };
+
+    console.log("[WhatsApp Document] Sending PDF:", {
+      recipient: maskPhone(recipient),
+      filename: pdfFilename,
+      mediaUrl,
+    });
+
+    let doc;
+    try {
+      doc = await postAoc(docPayload);
+    } catch (documentError) {
+      console.error("[WhatsApp Document] Send failed:", documentError.message);
+      return res.status(500).json({
+        error: true,
+        message: "WhatsApp conversation was opened, but the invoice PDF failed to send.",
         details: documentError.message,
       });
     }
 
-    // ------------------------------------------------------------
-    // 14. PARSE AOC RESPONSE
-    // ------------------------------------------------------------
+    aocDebug.document = { status: doc.status, body: doc.bodyText.slice(0, 500) };
+    console.log("[WhatsApp Document] Status:", doc.status, "Response:", doc.bodyText);
 
-    let parsedRes = {};
-
-    try {
-      parsedRes =
-        JSON.parse(documentResponseBody);
-    } catch (parseError) {
-      parsedRes = {
-        raw: documentResponseBody,
-      };
-    }
-
-    // ------------------------------------------------------------
-    // 15. CHECK PDF RESPONSE
-    // ------------------------------------------------------------
-
-    if (!documentResponse.ok) {
-      return res.status(
-        documentResponse.status || 500
-      ).json({
+    if (!doc.ok) {
+      return res.status(doc.status || 500).json({
         error: true,
-        message:
-          "WhatsApp text was sent, but the invoice PDF failed to send.",
-        details: documentResponseBody,
+        message: "WhatsApp conversation was opened, but the invoice PDF failed to send.",
+        details: doc.bodyText,
         pdfUrl: mediaUrl,
+        ...(process.env.NODE_ENV !== "production" ? { aoc: aocDebug } : {}),
       });
     }
 
-    // ------------------------------------------------------------
-    // 16. UPDATE DATABASE
-    // ------------------------------------------------------------
-
-    try {
-      await pool.execute(
-        `UPDATE invoices
-         SET
-           whatsapp_sent = 1,
-           whatsapp_sent_at = NOW(),
-           whatsapp_status = 'sent'
-         WHERE id = ?`,
-        sanitize(id)
-      );
-
-    } catch (updateErr) {
-      console.warn(
-        "WhatsApp database status update failed:",
-        updateErr.message
-      );
-
-      // Don't fail the WhatsApp request because
-      // the actual WhatsApp message was already sent.
-    }
-
-    // ------------------------------------------------------------
-    // 17. SUCCESS
-    // ------------------------------------------------------------
+    await markSent("sent");
 
     return res.status(200).json({
       error: false,
-      message:
-        "Invoice message and PDF sent successfully via WhatsApp.",
-      data: parsedRes,
+      message: "Invoice message and PDF sent successfully via WhatsApp.",
+      data: doc.parsed,
       whatsapp: {
         recipient,
-        textSent: true,
+        via: openingVia,
+        openingSent: true,
         pdfSent: true,
+        mediaSource,
         filename: pdfFilename,
         status: "sent",
       },
@@ -1611,5 +1681,8 @@ router.delete("/:id", authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
+// Exposed for unit tests (see test/invoicePdf.test.js). Express ignores extra
+// properties on the router, so this is safe for mounting.
+module.exports.generateInvoicePdfBuffer = generateInvoicePdfBuffer;
 
 
