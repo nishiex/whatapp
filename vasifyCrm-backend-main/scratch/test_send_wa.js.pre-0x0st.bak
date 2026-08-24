@@ -1,4 +1,4 @@
-﻿const mysql = require('mysql2/promise');
+const mysql = require('mysql2/promise');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
@@ -30,7 +30,7 @@ async function uploadPdfToPublicUrl(pdfBuffer, filename) {
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
     formData.append('fileToUpload', new Blob([pdfBuffer], { type: 'application/pdf' }), filename);
-    const res = await fetchWithRetry('https://0x0.st/', { method: 'POST', body: formData });
+    const res = await fetchWithRetry('https://catbox.moe/user/api.php', { method: 'POST', body: formData });
     const url = (await res.text()).trim();
     if (url.startsWith('http')) {
       console.log('Uploaded PDF to public URL:', url);
@@ -399,4 +399,3 @@ Vasify Technologies Support Team`;
 }
 
 testSendWhatsApp();
-

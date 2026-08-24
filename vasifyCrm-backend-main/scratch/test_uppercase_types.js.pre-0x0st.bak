@@ -1,4 +1,4 @@
-﻿const AOC_API_URL = 'https://api.aoc-portal.com/v1/whatsapp';
+const AOC_API_URL = 'https://api.aoc-portal.com/v1/whatsapp';
 const apiKey = 'kliu2IuLezqOxzzIuOXipDYaFnxubQ';
 const recipient = '918551890493';
 const from = '919769026133';
@@ -43,7 +43,7 @@ async function testUppercaseTypes() {
             {
               type: 'DOCUMENT',
               document: {
-                link: 'https://0x0.st/2bmdzs.pdf',
+                link: 'https://files.catbox.moe/2bmdzs.pdf',
                 filename: 'invoice-INV-8551890493-01.pdf'
               }
             }
@@ -82,4 +82,3 @@ async function testUppercaseTypes() {
 }
 
 testUppercaseTypes();
-

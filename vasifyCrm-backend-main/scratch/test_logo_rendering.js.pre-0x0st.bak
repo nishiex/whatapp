@@ -1,4 +1,4 @@
-﻿const PDFDocument = require('pdfkit');
+const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 
@@ -40,14 +40,13 @@ async function testPdfGeneration() {
 
   const pdfBuffer = await new Promise(res => doc.on('end', () => res(Buffer.concat(buffers))));
   
-  // Upload to 0x0.st to verify visually
+  // Upload to catbox to verify visually
   const formData = new FormData();
   formData.append('reqtype', 'fileupload');
   formData.append('fileToUpload', new Blob([pdfBuffer], { type: 'application/pdf' }), 'test_logo_fix.pdf');
-  const res = await fetch('https://0x0.st/', { method: 'POST', body: formData });
+  const res = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: formData });
   const url = (await res.text()).trim();
   console.log('PDF rendered & uploaded to:', url);
 }
 
 testPdfGeneration();
-

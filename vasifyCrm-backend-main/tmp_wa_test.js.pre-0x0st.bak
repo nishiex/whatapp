@@ -1,4 +1,4 @@
-﻿(async () => {
+(async () => {
   try {
     // Load env from project
     Object.assign(process.env, require('./env/development.json'));
@@ -8,21 +8,21 @@
     const pdfStr = '%PDF-1.1\n%âãÏÓ\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 44 >>\nstream\nBT\n/F1 24 Tf\n72 712 Td\n(Hello) Tj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000010 00000 n \n0000000067 00000 n \n0000000120 00000 n \n0000000217 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n308\n%%EOF';
     const pdfBuf = Buffer.from(pdfStr, 'binary');
 
-    // Upload to 0x0.st
+    // Upload to Catbox
     const formData = new FormData();
     formData.append('reqtype', 'fileupload');
     formData.append('fileToUpload', new Blob([pdfBuf], { type: 'application/pdf' }), 'test-invoice.pdf');
 
-    const uploadRes = await fetch('https://0x0.st/', { method: 'POST', body: formData });
+    const uploadRes = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: formData });
     const uploadTextRaw = (await uploadRes.text()).trim();
-    console.log('[BACKEND-TEST] 0x0.st response (raw):', JSON.stringify(uploadTextRaw));
+    console.log('[BACKEND-TEST] Catbox response (raw):', JSON.stringify(uploadTextRaw));
 
     if (!(uploadRes.ok && /^https?:\/\//i.test(uploadTextRaw))) {
-      console.error('[BACKEND-TEST] 0x0.st did not return a valid URL');
+      console.error('[BACKEND-TEST] Catbox did not return a valid URL');
       process.exit(1);
     }
 
-    // The media URL 0x0.st returned
+    // The media URL Catbox returned
     const mediaUrl = uploadTextRaw;
     console.log('mediaUrl:', mediaUrl);
 

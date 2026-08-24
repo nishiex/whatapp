@@ -1,6 +1,6 @@
 ﻿const fs = require('fs');
 const p = 'vasifyCrm-backend-main/routes/invoices.js';
-const bak = p + '\.pre-0x0st.bak';
+const bak = p + '.pre-catboxfix.bak';
 fs.copyFileSync(p, bak);
 let s = fs.readFileSync(p, 'utf8');
 
@@ -74,5 +74,4 @@ try {
   console.error('SYNTAX ERROR:', e && e.message);
   process.exit(1);
 }
-
 

@@ -1,6 +1,6 @@
 ﻿const fs = require('fs');
 const p = 'vasifyCrm-backend-main/routes/invoices.js';
-const bak = p + '\.pre-0x0st.bak';
+const bak = p + '.pre-catboxfix.bak';
 fs.copyFileSync(p, bak);
 let s = fs.readFileSync(p, 'utf8');
 
@@ -20,7 +20,7 @@ if (endIdx === -1) {
 // Build replacement content
 const replacement = `const uploadResponseText = (await uploadRes.text()).trim();
 
-      console.log("[WhatsApp Document] 0x0.st response (raw):", uploadResponseText);
+      console.log("[WhatsApp Document] Catbox response (raw):", uploadResponseText);
 
       // Try to extract a valid URL from the response.
       const urlMatch = uploadResponseText.match(/https?:\\/\\/[^\\s'\")>\\]]+/i);
@@ -30,7 +30,7 @@ const replacement = `const uploadResponseText = (await uploadRes.text()).trim();
         mediaUrl = extracted;
         console.log("[WhatsApp Document] Extracted public PDF URL:", mediaUrl);
       } else {
-        console.error("[WhatsApp Document] Invalid 0x0.st response (no URL found):", uploadResponseText);
+        console.error("[WhatsApp Document] Invalid Catbox response (no URL found):", uploadResponseText);
       }
 
 `;
@@ -74,5 +74,3 @@ try {
   console.error('SYNTAX ERROR:', e && e.message);
   process.exit(1);
 }
-
-
